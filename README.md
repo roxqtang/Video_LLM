@@ -51,16 +51,5 @@
 | **Model Compression** | [SVDQuant](https://arxiv.org/abs/2402.05917) | Zhu, et al. | Feb 2024 | arXiv |
 | **Multimodal** | [CuMo: Scaling Multimodal LLM with Co-Upcycled Mixture-of-Experts](https://arxiv.org/abs/2401.13601) | Shi, et al. | Jan 2024 | arXiv |
 
-## Related Researchers
-| Name | paper list | Affiliation |
-|------|------------|-------------|
-| Dina Katabi | [Dina Katabi](https://scholar.google.com/citations?hl=en&user=nst5fHgAAAAJ&view_op=list_works&sortby=pubdate) | MIT |
-| Trevor Darrell | [Trevor Darrell](https://scholar.google.com/citations?user=bh-uRFMAAAAJ) | UC Berkeley |
-| Jianbo Shi | [Jianbo Shi](https://scholar.google.com/citations?user=kuYZ_lYAAAAJ) | UPenn |
-| Yi Ma | [Yi Ma](https://scholar.google.com/citations?user=pC7zXMYAAAAJ) | UC Berkeley |
-| Ishan Misra | [Ishan Misra](https://scholar.google.com/citations?user=DxdyFk4AAAAJ) | Meta AI |
-| Yonglong Tian | [Yonglong Tian](https://scholar.google.com/citations?user=9zYBxqUAAAAJ) | MIT |
-| Song Han | [Song Han](https://scholar.google.com/citations?user=E0iCaa4AAAAJ) | MIT |
-| Yuxin Wu | [Yuxin Wu](https://scholar.google.com/citations?user=kAx6N9IAAAAJ) | Meta AI |
-| Mingyu Ding | [Mingyu Ding](https://scholar.google.com/citations?user=0HmFLnIAAAAJ) | CUHK |
+
 
