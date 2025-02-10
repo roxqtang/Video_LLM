@@ -51,3 +51,6 @@
 | | [Autoregressive Image Generation without Vector Quantization](https://arxiv.org/abs/2406.11838) | Chen, et al. | Jun 2024 | arXiv |
 | | [Rank-N-Contrast: Learning Continuous Representations for Regression](https://proceedings.neurips.cc/paper_files/paper/2023/hash/39e9c5913c970e3e49c2df629daff636-Abstract-Conference.html) | Zha, et al. | 2023 | NeurIPS 2023 |
 | | [Return of Unconditional Generation: A Self-supervised Representation Generation Method](https://openreview.net/forum?id=clTa4JFBML) | Li, et al. | Sep 2024 | NeurIPS 2024 oral |
+| **Multimodal** | [H-DenseFormer: An Efficient Hybrid Densely Connected Transformer for Multimodal Tumor Segmentation](https://arxiv.org/abs/2307.01486) | Shi, et al. | Jul 2023 | MICCAI 2023 |
+| | [CDDFuse: Correlation-Driven Dual-Branch Feature Decomposition for Multi-Modality Image Fusion](https://arxiv.org/abs/2211.14461) | Zhao, et al. | Apr 2023 | CVPR 2023 |
+
