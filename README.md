@@ -54,3 +54,146 @@
 | **Multimodal** | [H-DenseFormer: An Efficient Hybrid Densely Connected Transformer for Multimodal Tumor Segmentation](https://arxiv.org/abs/2307.01486) | Shi, et al. | Jul 2023 | MICCAI 2023 |
 | | [CDDFuse: Correlation-Driven Dual-Branch Feature Decomposition for Multi-Modality Image Fusion](https://arxiv.org/abs/2211.14461) | Zhao, et al. | Apr 2023 | CVPR 2023 |
 
+# Qwen2.5-VL 模型实现与预训练权重加载
+
+本项目是Qwen2.5-VL模型的自定义实现，并提供了加载官方预训练权重的功能。Qwen2.5-VL是通义千问团队开发的多模态大语言模型，结合了强大的视觉和语言理解能力。
+
+## 项目结构
+
+```
+├── myqwen.py                  # 模型架构实现
+├── modules/
+│   ├── vision_encoder.py      # 视觉编码器实现
+│   ├── m_rope.py              # 多模态旋转位置编码
+│   └── video_porocessor.py    # 视频处理器实现
+├── load_pretrained.py         # 预训练权重加载工具
+├── use_pretrained_model.py    # 使用加载了权重的模型示例
+├── Qwen25_VL_Architecture_README.md  # 架构详细说明
+└── README.md                  # 本文档
+```
+
+## 安装依赖
+
+本项目需要以下依赖:
+
+```bash
+pip install torch torchvision safetensors transformers pillow numpy
+```
+
+## 加载预训练权重
+
+我们提供了专门的工具来加载huggingface的safetensor格式的预训练权重到自定义实现的模型中。
+
+### 步骤1: 确保权重文件就绪
+
+权重文件应该在以下路径:
+```
+models/models--remyxai--SpaceQwen2.5-VL-3B-Instruct/snapshots/ff71e2f363d635f5dbbd655bf11ac7f976f94c7d/
+```
+
+包括:
+- model-00001-of-00002.safetensors
+- model-00002-of-00002.safetensors
+- model.safetensors.index.json
+- config.json
+- tokenizer相关文件
+
+### 步骤2: 运行权重加载脚本
+
+```bash
+python load_pretrained.py
+```
+
+这将:
+1. 从配置文件初始化模型
+2. 加载预训练权重并映射到自定义模型
+3. 保存加载后的模型到`pretrained_myqwen.pth`
+
+### 步骤3: 使用加载了权重的模型
+
+```bash
+python use_pretrained_model.py
+```
+
+这将展示如何:
+1. 加载带有预训练权重的模型
+2. 初始化tokenizer
+3. 处理图像输入
+4. 生成图像描述
+
+## 权重加载原理
+
+我们的`WeightLoader`类处理权重加载过程:
+
+1. **权重映射**: 建立Hugging Face的权重名称到我们自定义模型权重名称的映射
+   ```python
+   # 映射规则示例
+   mapping_rules = [
+       ("visual.patch_embed", "visual_encoder.patch_embed"),
+       ("model.layers", "llm_blocks"),
+       # 更多映射...
+   ]
+   ```
+
+2. **加载safetensor文件**: 使用safetensors库加载权重文件
+   ```python
+   weights = load_file(weight_file, device="cpu")
+   ```
+
+3. **应用权重**: 将加载的权重应用到模型参数
+   ```python
+   param.data.copy_(weight_value)
+   ```
+
+## 使用预训练模型
+
+通过`use_pretrained_model.py`中的`generate_for_image`函数，您可以轻松使用模型处理图像:
+
+```python
+generated_text = generate_for_image(
+    model=model,
+    tokenizer=tokenizer,
+    image=image_tensor,
+    prompt="描述这张图片中的内容。",
+    device="cuda"  # 或 "cpu"
+)
+```
+
+## 模型架构说明
+
+Qwen2.5-VL模型由几个关键组件组成:
+
+1. **视觉编码器**: 基于ViT的结构，处理图像输入
+2. **多模态旋转位置编码**: 创新的编码机制，同时处理时间和空间信息
+3. **视频处理器**: 处理视频帧之间的时间关系
+4. **语言模型**: 核心Transformer模块，处理多模态信息并生成文本
+
+更详细的架构说明请参见`Qwen25_VL_Architecture_README.md`。
+
+## 故障排除
+
+### 常见问题
+
+1. **权重加载错误**:
+   - 检查safetensor文件是否存在且完整
+   - 检查模型结构与权重是否匹配
+
+2. **形状不匹配错误**:
+   - 检查模型配置是否与预训练模型一致
+   - 查看具体的形状不匹配信息，调整相应的层
+
+3. **内存不足**:
+   - 对于GPU内存有限的情况，尝试使用CPU加载(`device="cpu"`)
+   - 或使用较小的模型版本
+
+## 后续工作
+
+1. 增强权重映射功能，支持更灵活的映射关系
+2. 添加量化支持，减少内存占用
+3. 优化对长视频的处理效率
+
+## 致谢
+
+- 感谢通义千问团队开发的优秀多模态模型
+- 感谢Hugging Face提供模型托管和分发服务
+
