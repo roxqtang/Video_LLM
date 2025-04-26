@@ -59,7 +59,8 @@ def evaluate_response(model_response, sample, dataset_name, threshold=2, batch_i
                     if pred_number is not None and true_number is not None:
                         diff = abs(pred_number - true_number)
                         result["diff"] = diff
-                        is_correct = diff <= threshold
+                        # 对CLEVR数据集，仅当完全正确时才算正确
+                        is_correct = (diff == 0)
                         result["correct"] = is_correct
                         
                         if is_correct:
@@ -104,11 +105,7 @@ def evaluate_response(model_response, sample, dataset_name, threshold=2, batch_i
                 return result, "invalid", None
     
     elif dataset_name == "SAT":
-        # 对于SAT数据集，添加选项信息
-        result["options"] = sample["options"]
-        result["correct_option"] = sample["correct_option"]
-        
-        # 首先确定是否为计数题（基于样本预处理时的标记）
+        # 对于SAT数据集，检查是否为计数题
         if "is_counting" in sample and sample["is_counting"]:
             result["question_type"] = "counting"
             
@@ -125,14 +122,21 @@ def evaluate_response(model_response, sample, dataset_name, threshold=2, batch_i
                     if pred_number is not None and true_number is not None:
                         diff = abs(pred_number - true_number)
                         result["diff"] = diff
-                        is_correct = diff <= threshold
-                        result["correct"] = is_correct
+                        # 对SAT数据集，使用阈值确定是否正确
+                        # 注意：只有差值为0时才算完全正确，但差值小于等于阈值时视为在可接受范围内
+                        is_completely_correct = (diff == 0)
+                        is_within_threshold = (diff <= threshold)
+                        result["completely_correct"] = is_completely_correct
+                        result["correct"] = is_within_threshold
                         
-                        if is_correct:
-                            print(f"答案评估: 计数问题回答正确 ({pred_number})")
+                        if is_completely_correct:
+                            print(f"答案评估: 计数问题完全正确 ({pred_number})")
+                            return result, "counting", True
+                        elif is_within_threshold:
+                            print(f"答案评估: 计数问题在误差范围内 (模型: {pred_number}, 正确: {true_number}, 差值: {diff})")
                             return result, "counting", True
                         else:
-                            print(f"答案评估: 计数问题回答错误 (模型: {pred_number}, 正确: {true_number}, 差值: {diff})")
+                            print(f"答案评估: 计数问题超出误差范围 (模型: {pred_number}, 正确: {true_number}, 差值: {diff})")
                             return result, "counting", False
                     else:
                         print("答案评估: 无法从回答中提取有效数字")
@@ -147,27 +151,21 @@ def evaluate_response(model_response, sample, dataset_name, threshold=2, batch_i
                 result["question_type"] = "invalid"
                 return result, "invalid", None
         else:
-            # 非计数题（选项题）
-            # 尝试提取模型选择的选项
-            pred_option, reason = extract_sat_answer(model_response, sample["options"])
-            result["pred_option"] = pred_option
-            
-            if pred_option is None:
-                result["question_type"] = "invalid"
-                print("答案评估: 无效答案格式")
-                return result, "invalid", None
-            else:
-                # 选项类型题目处理
-                result["question_type"] = "option"
-                is_correct = compare_answers(pred_option, sample["correct_option"])
-                result["correct"] = is_correct
+            # 非计数题，正常处理为"other"类型问题
+            result["question_type"] = "other"
+            # 尝试从响应中提取答案
+            match = re.search(r'<answer>(.*?)</answer>', model_response, re.IGNORECASE | re.DOTALL)
+            if match:
+                extracted_answer = match.group(1).strip()
+                result["pred_answer"] = extracted_answer
                 
-                if is_correct:
-                    print(f"答案评估: 正确 (选择了选项 {pred_option})")
-                    return result, "option", True
-                else:
-                    print(f"答案评估: 错误 (选择了选项 {pred_option}，正确答案是 {sample['correct_option']})")
-                    return result, "option", False
+                # 非计数题，我们只需记录结果，不会影响计数题统计
+                print("答案评估: 非计数题")
+                return result, "other", None
+            else:
+                print("答案评估: 无效答案格式 (未包含<answer>标签)")
+                result["question_type"] = "invalid"
+                return result, "invalid", None
     
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
@@ -197,7 +195,6 @@ def process_sat_sample(sample):
     try:
         question = sample['problem']
         solution = f"<answer>{sample['solution']}</answer>"
-        options = sample.get('options', [])
         ground_truth = sample.get('answer', sample.get('solution', ""))
         image = sample.get('image', None)
         
@@ -220,8 +217,6 @@ def process_sat_sample(sample):
         return {
             'problem': question,
             'solution': solution,
-            'options': options,
-            'correct_option': ground_truth.upper(),
             'image': image,
             'is_counting': is_counting,  # 新增字段，标记是否为计数题
             'number_answer': number_in_solution  # 新增字段，存储计数答案
@@ -291,10 +286,6 @@ def compare_answers(pred_answer, ground_truth):
     pred_str = str(pred_answer).strip().lower()
     truth_str = str(ground_truth).strip().lower()
     
-    # 检查是否是选项答案（A/B/C/D/E）
-    if re.match(r"^[a-e]$", truth_str) and re.match(r"^[a-e]$", pred_str):
-        return pred_str == truth_str
-    
     # 检查是否是数字答案
     try:
         pred_num = float(pred_str.replace(',', ''))
@@ -307,66 +298,6 @@ def compare_answers(pred_answer, ground_truth):
     # 对于描述性答案，检查是否包含关键信息
     # 这里使用简单的子字符串匹配，可以根据需要扩展为更复杂的逻辑
     return pred_str in truth_str or truth_str in pred_str
-
-def extract_sat_answer(model_response, options):
-    """从模型回答中提取SAT答案"""
-    if model_response is None or not model_response.strip():
-        return None, "没有回答"
-    
-    # 尝试从<answer>标签中提取
-    answer_pattern = r"<answer>(.*?)</answer>"
-    match = re.search(answer_pattern, model_response, re.DOTALL | re.IGNORECASE)
-    if match:
-        ans = match.group(1).strip()
-        # 如果答案只是一个选项字母（A/B/C/D/E），则直接返回
-        if re.match(r"^[A-Ea-e]$", ans):
-            return ans.upper(), "选择了选项"
-        
-        # 如果答案是一个选项的描述，尝试匹配到对应的选项
-        if options:
-            for i, option in enumerate(options):
-                option_clean = option.lower().strip()
-                ans_clean = ans.lower().strip()
-                if option_clean in ans_clean or ans_clean in option_clean:
-                    return chr(65 + i), "从描述推断选项"  # 返回A、B、C、D等
-    
-    # 检查整个回答是否包含选项选择的表述
-    option_patterns = [
-        r"\b(?:answer|option|choose|select|pick|choose option|select option|pick option)\s+(?:is\s+)?([A-Ea-e])\b",
-        r"\bthe\s+(?:answer|option)\s+(?:is\s+)?([A-Ea-e])\b",
-        r"\b([A-Ea-e])\s+is\s+(?:the\s+)?(?:answer|option)\b",
-        r"^([A-Ea-e])$",
-        # 新增的模式
-        r"(?:I\s+(?:would|will)\s+)?(?:choose|select|pick|go with)\s+(?:option\s+)?([A-Ea-e])\b",
-        r"(?:My\s+answer\s+(?:would|will)\s+be|I\s+(?:think|believe)\s+(?:it\s+is|it's))\s+([A-Ea-e])\b",
-        r"(?:The\s+correct\s+(?:answer|option)\s+(?:would|will|should)\s+be)\s+([A-Ea-e])\b",
-        r"(?:Based\s+on\s+(?:the|my)\s+(?:analysis|understanding|reasoning))\s*[,:]?\s*(?:the\s+answer\s+is|I\s+choose)\s+([A-Ea-e])\b",
-        r"(?:I\s+conclude\s+that\s+the\s+(?:answer|option)\s+is)\s+([A-Ea-e])\b",
-        r"(?:Option|Answer)\s+([A-Ea-e])\s+is\s+(?:correct|the right choice|the best choice)",
-        r"(?:the\s+answer\s+to\s+this\s+question\s+is)\s+([A-Ea-e])\b",
-        r"(?:Final\s+answer):\s*([A-Ea-e])\b",
-    ]
-    
-    for pattern in option_patterns:
-        match = re.search(pattern, model_response, re.IGNORECASE)
-        if match:
-            return match.group(1).upper(), "选择了选项"
-    
-    # 检查是否有大写字母单独出现在一行
-    single_letter_pattern = r"(?:^|\n)\s*([A-Ea-e])\s*(?:\n|$)"
-    match = re.search(single_letter_pattern, model_response)
-    if match:
-        return match.group(1).upper(), "单独选项"
-        
-    # 尝试在文本中查找包含选项字母的最后一个句子
-    sentences = re.split(r'[.!?]\s+', model_response)
-    for sentence in reversed(sentences):
-        for letter in "ABCDE":
-            if re.search(r'\b' + letter + r'\b', sentence):
-                return letter, "最后提及的选项"
-    
-    # 其他情况直接返回整个回答作为描述性答案
-    return model_response.strip(), "描述性答案"
 
 def main():
     # 设置命令行参数
@@ -493,36 +424,28 @@ def main():
                             print(f"无法加载图像，跳过")
                             continue
                     
-                    # 从用户消息中提取选项信息
-                    # 假设问题格式为："... Choose between the following options: A, B, C, D"
-                    options_text = user_message.split("Choose between the following options:")[-1].strip() if "Choose between the following options:" in user_message else ""
-                    options = [opt.strip() for opt in options_text.split(',')] if options_text else []
-                    if options and "or" in options[-1]:
-                        last_options = options[-1].split("or")
-                        options[-1] = last_options[0].strip()
-                        options.append(last_options[1].strip())
-                    
                     # 检查是否为计数题（通过solution判断是否包含数字）
                     is_counting = False
                     number_in_solution = extract_number_from_answer(ground_truth)
                     if number_in_solution is not None:
                         is_counting = True
                     
+                    # 移除跳过非计数题的逻辑，确保所有题目都会被处理
                     # 处理后的样本
                     processed_sample = {
                         'problem': user_message,
                         'solution': f"<answer>{ground_truth}</answer>",
-                        'options': options,
-                        'correct_option': ground_truth.upper(),
                         'image': image,
-                        'is_counting': is_counting,  # 新增字段，标记是否为计数题
-                        'number_answer': number_in_solution  # 新增字段，存储计数答案
+                        'is_counting': is_counting,  # 标记是否为计数题
+                        'number_answer': number_in_solution  # 存储计数答案
                     }
                     
                 else:
                     # Hugging Face格式
                     processed_sample = process_sat_sample(sample)
                     
+                    # 移除跳过非计数题的逻辑，确保所有题目都会被处理
+                
                 if processed_sample:
                     processed_samples.append(processed_sample)
             
@@ -536,7 +459,7 @@ def main():
                 if sample.get('is_counting', False):
                     prompt_suffix = " Please make sure to include the numeric answer."
                 
-                prompt = f"{question}{prompt_suffix} Please respond with the answer wrapped in <answer> </answer> tags, e.g. <answer>A</answer>; <answer>3</answer>; <answer>a</answer>; <answer>yes</answer>."
+                prompt = f"{question}{prompt_suffix} Please respond with the answer wrapped in <answer> </answer> tags, e.g. <answer>3</answer>; <answer>42</answer>; <answer>7.5</answer>."
                 messages = [
                     {
                         "role": "user",
@@ -559,22 +482,13 @@ def main():
     # 统计变量
     total_samples = 0
     invalid_answers = 0
+    counting_questions = 0
+    correct_counting = 0     # 完全正确的计数题数量
+    correct_within_threshold = 0  # 在阈值范围内的计数题数量
+    wrong_counting = 0
     num_diff_LE_smt = 0
     num_diff_grthan_smt = 0
-
-    if args.dataset == "CLEVR":
-        boolean_questions = 0
-        counting_samples = 0
-        total_correct = 0
-        total_false = 0
-        
-    elif args.dataset == "SAT":
-        option_questions = 0
-        correct_options = 0
-        wrong_options = 0
-        correct_counting = 0
-        wrong_counting = 0
-        counting_questions = 0
+    other_questions = 0
 
     print(f"\n开始批量测试 {max_samples} 个样本，每批 {batch_size} ...")
 
@@ -644,35 +558,19 @@ def main():
             # 更新统计
             total_samples += 1
             
-            if args.dataset == "CLEVR":
-                if question_type == "boolean":
-                    boolean_questions += 1
-                elif question_type == "invalid":
-                    invalid_answers += 1
-                elif question_type == "counting":
-                    counting_samples += 1
-                    if is_correct:
-                        total_correct += 1
-                    else:
-                        total_false += 1
-                        diff = current_sample["diff"]
-                        if diff <= small_diff_threshold:
-                            num_diff_LE_smt += 1
-                        else:
-                            num_diff_grthan_smt += 1
-            else:  # SAT
+            if args.dataset == "SAT":
                 if question_type == "invalid":
                     invalid_answers += 1
-                elif question_type == "option":
-                    option_questions += 1
-                    if is_correct:
-                        correct_options += 1
-                    else:
-                        wrong_options += 1
                 elif question_type == "counting":
                     counting_questions += 1
-                    if is_correct:
+                    if current_sample.get("completely_correct", False):
                         correct_counting += 1
+                        correct_within_threshold += 1  # 完全正确的也在阈值范围内
+                    elif current_sample.get("correct", False):  # 使用current_sample中的correct属性
+                        correct_within_threshold += 1  # 在阈值范围内但不完全正确
+                        wrong_counting += 1  # 不完全正确
+                        diff = current_sample.get("diff", 0)
+                        num_diff_LE_smt += 1  # 差距在阈值内
                     else:
                         wrong_counting += 1
                         diff = current_sample.get("diff", 0)
@@ -680,90 +578,65 @@ def main():
                             num_diff_LE_smt += 1
                         else:
                             num_diff_grthan_smt += 1
+                elif question_type == "other":
+                    other_questions += 1
             
-            print("-" * 30)
-                
             # 打印当前批次后的实时统计
+            print("-" * 30)
             print(f"当前已处理样本数: {total_samples}")
+            print(f"计数问题数: {counting_questions}")
+            print(f"其他类型问题数: {other_questions}")
+            print(f"无效答案数: {invalid_answers}")
+            if counting_questions > 0:
+                print(f"计数题完全正确率: {correct_counting / counting_questions:.2%}")
+                print(f"计数题阈值内正确率: {correct_within_threshold / counting_questions:.2%}")
+                print(f"计数题完全正确数: {correct_counting}")
+                print(f"计数题阈值内正确数: {correct_within_threshold}")
+                print(f"计数题不完全正确数: {wrong_counting}")
+                if wrong_counting > 0:
+                    print(f"差距小于等于{small_diff_threshold}的计数题: {num_diff_LE_smt}")
+                    print(f"差距大于{small_diff_threshold}的计数题: {num_diff_grthan_smt}")
+                    small_ratio = num_diff_LE_smt / wrong_counting if wrong_counting > 0 else 0
+                    large_ratio = num_diff_grthan_smt / wrong_counting if wrong_counting > 0 else 0
+                    print(f"预测误差小于等于{small_diff_threshold}的比例: {small_ratio:.2%}")
+                    print(f"预测误差大于{small_diff_threshold}的比例: {large_ratio:.2%}")
             
-            if args.dataset == "CLEVR":
-                if total_false > 0:
-                    ratio_small_diff = num_diff_LE_smt / total_false
-                    ratio_large_diff = num_diff_grthan_smt / total_false
-                else:
-                    ratio_small_diff = 0
-                    ratio_large_diff = 0
-                    
-                print(f"是非问题数: {boolean_questions}")
-                print(f"无效答案数: {invalid_answers}")
-                print(f"计数问题数: {counting_samples}")
-                if counting_samples > 0:
-                    print(f"计数问题完全正确数: {total_correct}")
-                    print(f"计数问题准确率: {total_correct / counting_samples:.2%}")
-                    print(f"差距小于等于{small_diff_threshold}的样本数: {num_diff_LE_smt}")
-                    print(f"差距大于{small_diff_threshold}的样本数: {num_diff_grthan_smt}")
-                if total_false > 0:
-                    print(f"预测误差小于等于{small_diff_threshold}的比例: {ratio_small_diff:.2%}")
-                    print(f"预测误差大于{small_diff_threshold}的比例: {ratio_large_diff:.2%}")
-                    
-            elif args.dataset == "SAT":
-                print(f"有效选项问题数: {option_questions}")
-                print(f"无效答案数: {invalid_answers}")
-                print(f"正确选项数: {correct_options}")
-                print(f"错误选项数: {wrong_options}")
-                if option_questions > 0:
-                    print(f"选项准确率: {correct_options / option_questions:.2%}")
-                
             print("=" * 50)
 
     # 5. 保存全部结果
     if args.dataset == "CLEVR":
         final_filename = os.path.join(results_dir, f"clevr_qwen_batch_results_{max_samples}_smt{small_diff_threshold}.json")
-        if total_false > 0:
-            ratio_small_diff = num_diff_LE_smt / total_false
-            ratio_large_diff = num_diff_grthan_smt / total_false
-        else:
-            ratio_small_diff = 0
-            ratio_large_diff = 0
-
         accuracy_stats = {
             "total_samples": total_samples,
-            "boolean_questions": boolean_questions,
             "invalid_answers": invalid_answers,
-            "counting_questions": counting_samples,
-            "exact_match_counting": total_correct,
+            "counting_questions": counting_questions,
+            "correct_counting": correct_counting,
+            "wrong_counting": wrong_counting,
             "small_diff_errors": num_diff_LE_smt,
             "large_diff_errors": num_diff_grthan_smt,
-            "total_counting_errors": total_false,
-            "counting_accuracy": total_correct / counting_samples if counting_samples > 0 else 0,
-            "ratio_small_diff": ratio_small_diff,
-            "ratio_large_diff": ratio_large_diff,
+            "counting_accuracy": correct_counting / counting_questions if counting_questions > 0 else 0,
+            "threshold": small_diff_threshold,
         }
                 
         print(f"\n统计结果:")
         print("-" * 50)
         print(f"总样本数: {total_samples}")
-        print(f"是非问题数: {boolean_questions}")
         print(f"无效答案数: {invalid_answers}")
-        print(f"计数问题数: {counting_samples}")
-        if counting_samples > 0:
-            print(f"计数问题完全正确数: {total_correct}")
-            print(f"计数问题准确率: {accuracy_stats['counting_accuracy']:.2%}")
-            print(f"差距小于等于{small_diff_threshold}的样本数: {num_diff_LE_smt}")
-            print(f"差距大于{small_diff_threshold}的样本数: {num_diff_grthan_smt}")
-        if total_false > 0:
-            print(f"预测误差小于等于{small_diff_threshold}的比例: {ratio_small_diff:.2%}")
-            print(f"预测误差大于{small_diff_threshold}的比例: {ratio_large_diff:.2%}")
+        print(f"计数问题数: {counting_questions}")
+        if counting_questions > 0:
+            print(f"计数题准确率: {accuracy_stats['counting_accuracy']:.2%}")
+            print(f"计数题完全正确数: {correct_counting}")
+            print(f"计数题错误数: {wrong_counting}")
+            if wrong_counting > 0:
+                print(f"差距小于等于{small_diff_threshold}的计数题: {num_diff_LE_smt}")
+                print(f"差距大于{small_diff_threshold}的计数题: {num_diff_grthan_smt}")
             
     elif args.dataset == "SAT":
-        if args.counting_only:
-            final_filename = os.path.join(results_dir, f"sat_qwen_counting_results_{max_samples}_smt{small_diff_threshold}.json")
-        else:
-            final_filename = os.path.join(results_dir, f"sat_qwen_batch_results_{max_samples}_smt{small_diff_threshold}.json")
+        final_filename = os.path.join(results_dir, f"sat_qwen_batch_results_{max_samples}_smt{small_diff_threshold}.json")
         
-        # 计算总正确数和准确率
-        total_correct = correct_options + correct_counting
-        total_valid_questions = option_questions + counting_questions
+        # 计算计数题准确率
+        exact_accuracy = correct_counting / counting_questions if counting_questions > 0 else 0
+        threshold_accuracy = correct_within_threshold / counting_questions if counting_questions > 0 else 0
         
         if wrong_counting > 0:
             ratio_small_diff = num_diff_LE_smt / wrong_counting
@@ -772,23 +645,18 @@ def main():
             ratio_small_diff = 0
             ratio_large_diff = 0
         
-        # 计算计数题准确率
-        counting_accuracy = correct_counting / counting_questions if counting_questions > 0 else 0
-        
         accuracy_stats = {
             "total_samples": total_samples,
-            "option_questions": option_questions,
             "counting_questions": counting_questions,
+            "other_questions": other_questions,
             "invalid_answers": invalid_answers,
-            "correct_options": correct_options,
-            "wrong_options": wrong_options,
-            "correct_counting": correct_counting,
+            "exact_correct_counting": correct_counting,
+            "threshold_correct_counting": correct_within_threshold,
             "wrong_counting": wrong_counting,
             "small_diff_errors": num_diff_LE_smt,
             "large_diff_errors": num_diff_grthan_smt,
-            "option_accuracy": correct_options / option_questions if option_questions > 0 else 0,
-            "counting_accuracy": counting_accuracy,
-            "overall_accuracy": total_correct / total_valid_questions if total_valid_questions > 0 else 0,
+            "exact_counting_accuracy": exact_accuracy,
+            "threshold_counting_accuracy": threshold_accuracy,
             "ratio_small_diff": ratio_small_diff,
             "ratio_large_diff": ratio_large_diff,
             "threshold": small_diff_threshold,
@@ -798,26 +666,19 @@ def main():
         print("-" * 50)
         print(f"总样本数: {total_samples}")
         print(f"计数问题数: {counting_questions}")
+        print(f"其他类型问题数: {other_questions}")
+        print(f"无效答案数: {invalid_answers}")
         if counting_questions > 0:
-            print(f"计数题准确率: {counting_accuracy:.2%}")
+            print(f"计数题完全正确率: {exact_accuracy:.2%}")
+            print(f"计数题阈值内正确率: {threshold_accuracy:.2%}")
             print(f"计数题完全正确数: {correct_counting}")
-            print(f"计数题错误数: {wrong_counting}")
+            print(f"计数题阈值内正确数: {correct_within_threshold}")
+            print(f"计数题不完全正确数: {wrong_counting}")
             if wrong_counting > 0:
                 print(f"差距小于等于{small_diff_threshold}的计数题: {num_diff_LE_smt}")
                 print(f"差距大于{small_diff_threshold}的计数题: {num_diff_grthan_smt}")
                 print(f"预测误差小于等于{small_diff_threshold}的比例: {ratio_small_diff:.2%}")
                 print(f"预测误差大于{small_diff_threshold}的比例: {ratio_large_diff:.2%}")
-                
-        if not args.counting_only:
-            print(f"有效选项问题数: {option_questions}")
-            print(f"无效答案数: {invalid_answers}")
-            print(f"正确选项数: {correct_options}")
-            print(f"错误选项数: {wrong_options}")
-            if option_questions > 0:
-                print(f"选项准确率: {accuracy_stats['option_accuracy']:.2%}")
-            
-            if total_valid_questions > 0:
-                print(f"总体准确率: {accuracy_stats['overall_accuracy']:.2%}")
             
     # 将统计数据添加到结果中
     results_with_stats = {
